@@ -1,4 +1,4 @@
-%% LFT-Net (Proposed) vs MPT-SFANet (TAES 2024 Baseline)
+﻿%% LFT-Net (Proposed) vs MPT-SFANet (TAES 2024 Baseline)
 % 目标：全维度对比实验 (Acc, Precision, Recall, F1)
 clear; close all; clc;
 rng(42);
@@ -30,7 +30,7 @@ X_train_static = squeeze(mean(X_train, 2))';
 X_test_static = squeeze(mean(X_test, 2))';
 
 %% 3. 模型定义与训练 (带进度条)
-fig = figure('Position', [100, 100, 1000, 600], 'Name', 'Training Monitor');
+fig = figure('Name', 'Training Monitor');
 
 % 通用训练选项
 getOpts = @(lr) trainingOptions('adam', ...
@@ -43,29 +43,106 @@ getOpts = @(lr) trainingOptions('adam', ...
 % 1. SVM
 fprintf('=== 1/6 训练 SVM (Static Baseline) ===\n');
 updateProgress(fig, 1, 6, 'SVM');
-svm_mdl = fitcecoc(X_train_static, Y_train, 'Learners', templateSVM('KernelFunction','linear'));
+svm_template = templateSVM('KernelFunction','linear', 'BoxConstraint', 0.1, 'KernelScale', 'auto');
+svm_mdl = fitcecoc(X_train_static, Y_train, 'Learners', svm_template, 'Coding', 'onevsall');
 Y_pred_svm = predict(svm_mdl, X_test_static);
 
 % 2. MLP
 fprintf('=== 2/6 训练 MLP (NN Baseline) ===\n');
 updateProgress(fig, 2, 6, 'MLP');
-layers_mlp = [featureInputLayer(numFeatures,'Normalization','zscore'), fullyConnectedLayer(128), reluLayer, fullyConnectedLayer(numClasses), softmaxLayer, classificationLayer];
-net_mlp = trainNetwork(X_train_static, Y_train, layers_mlp, trainingOptions('adam', 'MaxEpochs', 100, 'Verbose', false));
-Y_pred_mlp = classify(net_mlp, X_test_static);
+layers_mlp = [
+    featureInputLayer(numFeatures, 'Name', 'input', 'Normalization', 'zscore')
+    fullyConnectedLayer(128, 'Name', 'fc1')
+    batchNormalizationLayer('Name', 'bn1')
+    reluLayer('Name', 'relu1')
+    dropoutLayer(0.4, 'Name', 'drop1')
+    fullyConnectedLayer(64, 'Name', 'fc2')
+    batchNormalizationLayer('Name', 'bn2')
+    reluLayer('Name', 'relu2')
+    dropoutLayer(0.4, 'Name', 'drop2')
+    fullyConnectedLayer(numClasses, 'Name', 'fc_out')
+    ];
+opts_mlp = trainingOptions('adam', ...
+    'MaxEpochs', 120, ...
+    'MiniBatchSize', 128, ...
+    'InitialLearnRate', 0.003, ...
+    'LearnRateSchedule', 'piecewise', ...
+    'LearnRateDropFactor', 0.5, ...
+    'LearnRateDropPeriod', 40, ...
+    'L2Regularization', 0.0001, ...
+    'GradientThreshold', 2, ...
+    'ValidationData', {X_test_static, Y_test}, ...
+    'ValidationFrequency', 30, ...
+    'Shuffle', 'every-epoch', ...
+    'Plots', 'training-progress', ...
+    'Verbose', true);
+[net_mlp, info_mlp] = trainnet(X_train_static, Y_train, layers_mlp, 'crossentropy', opts_mlp);
+Y_scores_mlp = predict_with_format(net_mlp, X_test_static);
+Y_pred_mlp = scores2label(Y_scores_mlp, categories(Y_train));
 
 % 3. LSTM
 fprintf('=== 3/6 训练 LSTM (RNN Baseline) ===\n');
 updateProgress(fig, 3, 6, 'LSTM');
-layers_lstm = [sequenceInputLayer(numFeatures,'Normalization','zscore'), lstmLayer(100,'OutputMode','last'), fullyConnectedLayer(numClasses), softmaxLayer, classificationLayer];
-net_lstm = trainNetwork(X_train_seq, Y_train, layers_lstm, getOpts(0.002));
-Y_pred_lstm = classify(net_lstm, X_test_seq);
+layers_lstm = [
+    sequenceInputLayer(numFeatures, 'Name', 'input', 'Normalization', 'zscore')
+    lstmLayer(90, 'OutputMode', 'sequence', 'Name', 'lstm1')
+    dropoutLayer(0.4, 'Name', 'drop1')
+    lstmLayer(60, 'OutputMode', 'last', 'Name', 'lstm2')
+    dropoutLayer(0.3, 'Name', 'drop2')
+    fullyConnectedLayer(16, 'Name', 'fc_mid')
+    batchNormalizationLayer('Name', 'bn_mid')
+    reluLayer('Name', 'relu_mid')
+    fullyConnectedLayer(numClasses, 'Name', 'fc_out')
+    ];
+opts_lstm = trainingOptions('adam', ...
+    'MaxEpochs', 100, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.002, ...
+    'LearnRateSchedule', 'piecewise', ...
+    'LearnRateDropFactor', 0.5, ...
+    'LearnRateDropPeriod', 30, ...
+    'L2Regularization', 0.0005, ...
+    'GradientThreshold', 1, ...
+    'ValidationData', {X_test_seq, Y_test}, ...
+    'ValidationFrequency', 30, ...
+    'Shuffle', 'every-epoch', ...
+    'Plots', 'training-progress', ...
+    'Verbose', true);
+[net_lstm, info_lstm] = trainnet(X_train_seq, Y_train, layers_lstm, 'crossentropy', opts_lstm);
+Y_scores_lstm = predict_with_format(net_lstm, X_test_seq);
+Y_pred_lstm = scores2label(Y_scores_lstm, categories(Y_train));
 
 % 4. GRU
 fprintf('=== 4/6 训练 GRU (RNN Baseline) ===\n');
 updateProgress(fig, 4, 6, 'GRU');
-layers_gru = [sequenceInputLayer(numFeatures,'Normalization','zscore'), gruLayer(100,'OutputMode','last'), fullyConnectedLayer(numClasses), softmaxLayer, classificationLayer];
-net_gru = trainNetwork(X_train_seq, Y_train, layers_gru, getOpts(0.002));
-Y_pred_gru = classify(net_gru, X_test_seq);
+layers_gru = [
+    sequenceInputLayer(numFeatures, 'Name', 'input', 'Normalization', 'zscore')
+    gruLayer(84, 'OutputMode', 'sequence', 'Name', 'gru1')
+    dropoutLayer(0.3, 'Name', 'drop1')
+    gruLayer(48, 'OutputMode', 'last', 'Name', 'gru2')
+    dropoutLayer(0.3, 'Name', 'drop2')
+    fullyConnectedLayer(12, 'Name', 'fc_mid')
+    batchNormalizationLayer('Name', 'bn_mid')
+    reluLayer('Name', 'relu_mid')
+    fullyConnectedLayer(numClasses, 'Name', 'fc_out')
+    ];
+opts_gru = trainingOptions('adam', ...
+    'MaxEpochs', 100, ...
+    'MiniBatchSize', 64, ...
+    'InitialLearnRate', 0.002, ...
+    'LearnRateSchedule', 'piecewise', ...
+    'LearnRateDropFactor', 0.5, ...
+    'LearnRateDropPeriod', 30, ...
+    'L2Regularization', 0.0005, ...
+    'GradientThreshold', 1, ...
+    'ValidationData', {X_test_seq, Y_test}, ...
+    'ValidationFrequency', 30, ...
+    'Shuffle', 'every-epoch', ...
+    'Plots', 'training-progress', ...
+    'Verbose', true);
+[net_gru, info_gru] = trainnet(X_train_seq, Y_train, layers_gru, 'crossentropy', opts_gru);
+Y_scores_gru = predict_with_format(net_gru, X_test_seq);
+Y_pred_gru = scores2label(Y_scores_gru, categories(Y_train));
 
 % 5. MPT-SFANet (Comparison)
 fprintf('=== 5/6 训练 MPT-SFANet (TAES Ref) ===\n');
@@ -129,15 +206,15 @@ t_svm = measure_time(svm_mdl, test_sample_static, 'predict');
 
 % 2. MLP 推理时间
 fprintf('  2. 测量 MLP...\n');
-t_mlp = measure_time(net_mlp, test_sample_static, 'classify');
+t_mlp = measure_time(net_mlp, test_sample_static, 'predict');
 
 % 3. LSTM 推理时间
 fprintf('  3. 测量 LSTM...\n');
-t_lstm = measure_time(net_lstm, test_sample_seq, 'classify');
+t_lstm = measure_time(net_lstm, test_sample_seq, 'predict');
 
 % 4. GRU 推理时间
 fprintf('  4. 测量 GRU...\n');
-t_gru = measure_time(net_gru, test_sample_seq, 'classify');
+t_gru = measure_time(net_gru, test_sample_seq, 'predict');
 
 % 5. MPT-SFANet 推理时间
 fprintf('  5. 测量 MPT-SFANet...\n');
@@ -152,57 +229,148 @@ times_list = [t_svm, t_mlp, t_lstm, t_gru, t_mpt, t_lft];
 fprintf('  测量完成。\n');
 
 %% 4.8 数据量敏感性实验（少样本/数据效率）
+% fprintf('\n======================================\n');
+% fprintf('  【步驟 4.8】数据量敏感性 (少样本/数据效率)\n');
+% fprintf('======================================\n');
+
+% sample_ratios = [0.25, 0.50, 0.75, 1.00];  % 训练样本占比
+% numSeeds = 3;                               % 重复次数，统计均值方差
+% sens_models = {'LSTM', 'MPT-SFANet', 'LFT-Net'}; % 关注的代表性模型
+
+% acc_stack = zeros(numel(sens_models), numel(sample_ratios), numSeeds);
+% f1_stack = zeros(numel(sens_models), numel(sample_ratios), numSeeds);
+
+% for r = 1:numel(sample_ratios)
+%     ratio = sample_ratios(r);
+%     trainPerClass_ratio = max(20, round(numTrainSamplesPerClass * ratio));
+%     fprintf('  -> 训练样本占比: %.0f%% (每类 %d 条)\n', ratio*100, trainPerClass_ratio);
+    
+%     for sd = 1:numSeeds
+%         rng(100 + sd);  % 确保可重复
+%         [Xtr, Ytr] = generateBalancedRadarData(numClasses, trainPerClass_ratio, numFeatures, T);
+%         [Xte, Yte] = generateBalancedRadarData(numClasses, numTestSamplesPerClass, numFeatures, T);
+        
+%         % 序列 & 静态格式
+%         Xtr_seq = cell(size(Xtr, 3), 1); Xte_seq = cell(size(Xte, 3), 1);
+%         for i = 1:size(Xtr, 3), Xtr_seq{i} = Xtr(:, :, i)'; end
+%         for i = 1:size(Xte, 3), Xte_seq{i} = Xte(:, :, i)'; end
+        
+%         % 仅评估代表性三种模型（时序/RNN、对比基线、本文方法）
+%         for m = 1:numel(sens_models)
+%             mdl_name = sens_models{m};
+%             switch mdl_name
+%                 case 'LSTM'
+%                     layers_sens = [sequenceInputLayer(numFeatures,'Normalization','zscore'), lstmLayer(100,'OutputMode','last'), fullyConnectedLayer(numClasses), softmaxLayer, classificationLayer];
+%                     opts_sens = trainingOptions('adam', 'MaxEpochs', 120, 'MiniBatchSize', 64, 'InitialLearnRate', 0.002, ...
+%                         'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
+%                         'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+%                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
+%                     Y_pred = classify(net_sens, Xte_seq);
+                    
+%                 case 'MPT-SFANet'
+%                     layers_sens = defineMPT_SFANet_1D(numFeatures, numClasses);
+%                     opts_sens = trainingOptions('adam', 'MaxEpochs', 130, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
+%                         'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
+%                         'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+%                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
+%                     Y_pred = classify(net_sens, Xte_seq);
+                    
+%                 case 'LFT-Net'
+%                     layers_sens = defineLFTNet(numFeatures, numClasses);
+%                     opts_sens = trainingOptions('adam', 'MaxEpochs', 130, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
+%                         'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
+%                         'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+%                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
+%                     Y_pred = classify(net_sens, Xte_seq);
+%             end
+            
+%             [acc_tmp, ~, ~, f1_tmp] = calculateAllMetrics(Y_pred, Yte);
+%             acc_stack(m, r, sd) = acc_tmp;
+%             f1_stack(m, r, sd) = f1_tmp;
+%             fprintf('    [%s] Seed %d -> Acc %.2f%% | F1 %.2f%%\n', mdl_name, sd, acc_tmp*100, f1_tmp*100);
+%         end
+%     end
+% end
+
+% acc_mean = mean(acc_stack, 3); acc_std = std(acc_stack, 0, 3);
+% f1_mean  = mean(f1_stack, 3); f1_std  = std(f1_stack, 0, 3);
+
+% % 可视化：数据量 vs 性能（均值±方差）
+% figure('Position', [100, 100, 1200, 500], 'Name', 'Data-Efficiency Analysis');
+% subplot(1,2,1);
+% hold on; grid on;
+% for m = 1:numel(sens_models)
+%     errorbar(sample_ratios*100, acc_mean(m,:)*100, acc_std(m,:)*100, '-o', 'LineWidth', 1.5);
+% end
+% xlabel('训练样本占比 (%)'); ylabel('Accuracy (%)');
+% title('数据量敏感性 - Accuracy (均值±std)');
+% legend(sens_models, 'Location', 'southeast');
+
+% subplot(1,2,2);
+% hold on; grid on;
+% for m = 1:numel(sens_models)
+%     errorbar(sample_ratios*100, f1_mean(m,:)*100, f1_std(m,:)*100, '-o', 'LineWidth', 1.5);
+% end
+% xlabel('训练样本占比 (%)'); ylabel('Macro F1 (%)');
+% title('数据量敏感性 - Macro F1 (均值±std)');
+% legend(sens_models, 'Location', 'southeast');
+
+%% 快速版数据量敏感性实验（4.8，快速测试，仅作验证用）
 fprintf('\n======================================\n');
-fprintf('  【步驟 4.8】数据量敏感性 (少样本/数据效率)\n');
+fprintf('  【步骤 4.8 - 快速测试】数据量敏感性 (少样本/数据效率)\n');
 fprintf('======================================\n');
 
-sample_ratios = [0.25, 0.50, 0.75, 1.00];  % 训练样本占比
-numSeeds = 3;                               % 重复次数，统计均值方差
-sens_models = {'LSTM', 'MPT-SFANet', 'LFT-Net'}; % 关注的代表性模型
+sample_ratios_fast = [0.30, 0.60, 1.00];  % 训练样本占比（快速）
+numSeeds_fast = 1;                        % 仅做 1 次重复
+sens_models_fast = {'LSTM', 'MPT-SFANet', 'LFT-Net'};
 
-acc_stack = zeros(numel(sens_models), numel(sample_ratios), numSeeds);
-f1_stack = zeros(numel(sens_models), numel(sample_ratios), numSeeds);
+acc_stack = zeros(numel(sens_models_fast), numel(sample_ratios_fast), numSeeds_fast);
+f1_stack = zeros(numel(sens_models_fast), numel(sample_ratios_fast), numSeeds_fast);
 
-for r = 1:numel(sample_ratios)
-    ratio = sample_ratios(r);
+for r = 1:numel(sample_ratios_fast)
+    ratio = sample_ratios_fast(r);
     trainPerClass_ratio = max(20, round(numTrainSamplesPerClass * ratio));
     fprintf('  -> 训练样本占比: %.0f%% (每类 %d 条)\n', ratio*100, trainPerClass_ratio);
     
-    for sd = 1:numSeeds
-        rng(100 + sd);  % 确保可重复
+    for sd = 1:numSeeds_fast
+        rng(200 + sd);  % 固定随机种子
         [Xtr, Ytr] = generateBalancedRadarData(numClasses, trainPerClass_ratio, numFeatures, T);
         [Xte, Yte] = generateBalancedRadarData(numClasses, numTestSamplesPerClass, numFeatures, T);
         
-        % 序列 & 静态格式
+        % 序列格式
         Xtr_seq = cell(size(Xtr, 3), 1); Xte_seq = cell(size(Xte, 3), 1);
         for i = 1:size(Xtr, 3), Xtr_seq{i} = Xtr(:, :, i)'; end
         for i = 1:size(Xte, 3), Xte_seq{i} = Xte(:, :, i)'; end
         
-        % 仅评估代表性三种模型（时序/RNN、对比基线、本文方法）
-        for m = 1:numel(sens_models)
-            mdl_name = sens_models{m};
+        for m = 1:numel(sens_models_fast)
+            mdl_name = sens_models_fast{m};
             switch mdl_name
                 case 'LSTM'
-                    layers_sens = [sequenceInputLayer(numFeatures,'Normalization','zscore'), lstmLayer(100,'OutputMode','last'), fullyConnectedLayer(numClasses), softmaxLayer, classificationLayer];
-                    opts_sens = trainingOptions('adam', 'MaxEpochs', 120, 'MiniBatchSize', 64, 'InitialLearnRate', 0.002, ...
-                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
-                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+                    layers_sens = [
+                        sequenceInputLayer(numFeatures,'Normalization','zscore')
+                        lstmLayer(64,'OutputMode','last')
+                        fullyConnectedLayer(numClasses)
+                        softmaxLayer
+                        classificationLayer];
+                    opts_sens = trainingOptions('adam', 'MaxEpochs', 40, 'MiniBatchSize', 64, 'InitialLearnRate', 0.002, ...
+                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',20, ...
+                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 15, 'Verbose', false);
                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
                     Y_pred = classify(net_sens, Xte_seq);
                     
                 case 'MPT-SFANet'
                     layers_sens = defineMPT_SFANet_1D(numFeatures, numClasses);
-                    opts_sens = trainingOptions('adam', 'MaxEpochs', 130, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
-                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
-                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+                    opts_sens = trainingOptions('adam', 'MaxEpochs', 50, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
+                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',25, ...
+                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 15, 'Verbose', false);
                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
                     Y_pred = classify(net_sens, Xte_seq);
                     
                 case 'LFT-Net'
                     layers_sens = defineLFTNet(numFeatures, numClasses);
-                    opts_sens = trainingOptions('adam', 'MaxEpochs', 130, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
-                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',40, ...
-                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 25, 'Verbose', false);
+                    opts_sens = trainingOptions('adam', 'MaxEpochs', 50, 'MiniBatchSize', 64, 'InitialLearnRate', 0.001, ...
+                        'LearnRateSchedule','piecewise','LearnRateDropFactor',0.5,'LearnRateDropPeriod',25, ...
+                        'ValidationData',{Xte_seq, Yte}, 'ValidationFrequency', 15, 'Verbose', false);
                     net_sens = trainNetwork(Xtr_seq, Ytr, layers_sens, opts_sens);
                     Y_pred = classify(net_sens, Xte_seq);
             end
@@ -218,25 +386,24 @@ end
 acc_mean = mean(acc_stack, 3); acc_std = std(acc_stack, 0, 3);
 f1_mean  = mean(f1_stack, 3); f1_std  = std(f1_stack, 0, 3);
 
-% 可视化：数据量 vs 性能（均值±方差）
-figure('Position', [100, 100, 1200, 500], 'Name', 'Data-Efficiency Analysis');
+figure('Position', [100, 100, 1200, 500], 'Name', 'Data-Efficiency Analysis (Fast)');
 subplot(1,2,1);
 hold on; grid on;
-for m = 1:numel(sens_models)
-    errorbar(sample_ratios*100, acc_mean(m,:)*100, acc_std(m,:)*100, '-o', 'LineWidth', 1.5);
+for m = 1:numel(sens_models_fast)
+    errorbar(sample_ratios_fast*100, acc_mean(m,:)*100, acc_std(m,:)*100, '-o', 'LineWidth', 1.5);
 end
 xlabel('训练样本占比 (%)'); ylabel('Accuracy (%)');
-title('数据量敏感性 - Accuracy (均值±std)');
-legend(sens_models, 'Location', 'southeast');
+title('数据量敏感性 - Accuracy');
+legend(sens_models_fast, 'Location', 'southeast');
 
 subplot(1,2,2);
 hold on; grid on;
-for m = 1:numel(sens_models)
-    errorbar(sample_ratios*100, f1_mean(m,:)*100, f1_std(m,:)*100, '-o', 'LineWidth', 1.5);
+for m = 1:numel(sens_models_fast)
+    errorbar(sample_ratios_fast*100, f1_mean(m,:)*100, f1_std(m,:)*100, '-o', 'LineWidth', 1.5);
 end
 xlabel('训练样本占比 (%)'); ylabel('Macro F1 (%)');
-title('数据量敏感性 - Macro F1 (均值±std)');
-legend(sens_models, 'Location', 'southeast');
+title('数据量敏感性 - Macro F1');
+legend(sens_models_fast, 'Location', 'southeast');
 
 %% 4.9 鲁棒性 & 校准度 & PR/ROC
 fprintf('\n======================================\n');
@@ -258,10 +425,12 @@ for nl = 1:numel(noise_levels)
 end
 
 % 4.9.2 校准度 (Reliability/ECE/Brier，基于 LFT-Net 概率)
-[score_lft, classList_lft] = predict(net_lft, X_test_seq);
+% LFT-Net 是 SeriesNetwork，使用 classify 获取概率
+[~, score_lft] = classify(net_lft, X_test_seq);
+classList_lft = net_lft.Layers(end).Classes; % align score columns with network class order
 [~, pred_idx] = max(score_lft, [], 2);
 conf = max(score_lft, [], 2);
-true_idx = arrayfun(@(y) find(classList_lft==y), Y_test);
+[~, true_idx] = ismember(Y_test, classList_lft);
 
 numBins = 10;
 edges = linspace(0,1,numBins+1);
@@ -290,7 +459,8 @@ fprintf('  校准指标: ECE = %.4f, Brier = %.4f\n', ece, brier);
 % 4.9.3 PR/ROC (关键类：C2=Bird, C8=UAV) 对比 MPT vs LFT
 keyClasses = [2, 8];
 pr_curves = cell(numel(keyClasses),2); roc_curves = cell(numel(keyClasses),2); auc_store = zeros(numel(keyClasses),2);
-[score_mpt, ~] = predict(net_mpt, X_test_seq);
+% MPT-SFANet 是 SeriesNetwork，使用 classify 获取概率
+[~, score_mpt] = classify(net_mpt, X_test_seq);
 yt_numeric = true_idx;
 
 for k = 1:numel(keyClasses)
@@ -349,7 +519,7 @@ grid on; xlabel('False Positive Rate'); ylabel('True Positive Rate');
 title('关键类 ROC 曲线'); legend('Location','southeast');
 
 %% 5. 绘图：混淆矩阵对比 (定性分析)
-figure('Position', [50, 50, 1600, 900], 'Name', 'Comparison of Confusion Matrices');
+figure( 'Name', 'Comparison of Confusion Matrices');
 for i = 1:6
     subplot(2, 3, i);
     cm_chart = confusionchart(Y_test, preds_list{i});
@@ -362,7 +532,7 @@ end
 sgtitle('Confusion Matrix Comparison: Baselines vs. MPT-SFANet vs. LFT-Net (Ours)', 'FontSize', 16, 'FontWeight', 'bold');
 
 %% 6. 绘图：多维度指标雷达图 (可选，直观展示)
-figure('Position', [100, 100, 800, 500], 'Name', 'Metrics Bar Chart');
+figure( 'Name', 'Metrics Bar Chart');
 b = bar(results_matrix * 100);
 xticklabels(models_name);
 ylabel('Score (%)');
@@ -433,4 +603,27 @@ function updateProgress(fig, current, total, name)
     xlabel('Progress');
     axis off;
     drawnow;
+end
+
+function label = scores2label(scores, classes)
+    % 将网络输出的分数矩阵转换为分类标签（与 Old.m 中实现一致）
+    [~, idx] = max(scores, [], 2);
+    label = categorical(classes(idx));
+end
+
+function scores = predict_with_format(model, data)
+    % 辅助函数：处理 dlnetwork 的预测
+    % dlnetwork 从 trainnet 返回，minibatchpredict 可以直接使用
+    if isa(model, 'dlnetwork')
+        % dlnetwork：使用 minibatchpredict
+        % 注意：minibatchpredict 可以直接处理 [numSamples x numFeatures] 或 cell 数据
+        scores = minibatchpredict(model, data);
+        % 确保输出是普通数组而不是 dlarray
+        if isdlarray(scores)
+            scores = extractdata(scores);
+        end
+    else
+        % SeriesNetwork：直接使用 classify
+        [~, scores] = classify(model, data);
+    end
 end

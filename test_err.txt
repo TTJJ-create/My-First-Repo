@@ -1,0 +1,11 @@
+{错误使用 minibatchpredict (第 57 行)
+Layer "input": Invalid input data. 通道维度大小无效。层需要通道维度大小为 10 的输入，但收到大小为 1800 的输入。
+
+出错 trainModels_Comparison2>predict_with_format (第 551 行)
+            batch_scores = minibatchpredict(model, data_dlarray);
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+出错 trainModels_Comparison2 (第 80 行)
+Y_scores_mlp = predict_with_format(net_mlp, X_test_static);
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+} 
+ERROR: MATLAB error Exit Status: 0x00000001

@@ -1,0 +1,30 @@
+
+	Sponsored License -- for use in support of a program or activity sponsored by MathWorks.
+	Not for government, commercial or other non-sponsored organizational use.
+
+===== 简化测试：验证 trainnet 修复 =====
+
+【1】生成小规模测试数据
+  ? 完成
+
+【2】测试 MLP (trainnet + predict_with_format)
+  ? trainnet 训练成功
+  ? predict_with_format 输出: [20 x 3]
+  ? scores2label 转换成功
+  ? 准确率: 30.00%
+
+【3】测试 LSTM (trainnet + predict_with_format)
+  ? trainnet 训练成功
+  ? predict_with_format 输出: [20 x 3]
+  ? scores2label 转换成功
+  ? 准确率: 30.00%
+
+【4】测试 SeriesNetwork (trainNetwork - 参考)
+  ? trainNetwork 训练成功
+  ? classify 输出: labels=[20 x 1], scores=[20 x 3]
+  ? 准确率: 35.00%
+
+===== ? 所有测试通过！=====
+MLP (trainnet):    30.00%
+LSTM (trainnet):   30.00%
+LSTM (trainNet):   35.00%
